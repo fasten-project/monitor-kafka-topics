@@ -8,8 +8,13 @@ import org.apache.flink.streaming.api.scala.StreamExecutionEnvironment
 import org.apache.flink.streaming.connectors.kafka.FlinkKafkaConsumer
 import scopt.OParser
 import org.apache.flink.api.scala._
-import org.apache.flink.streaming.api.windowing.assigners.TumblingProcessingTimeWindows
+import org.apache.flink.streaming.api.windowing.assigners.{
+  GlobalWindows,
+  TumblingProcessingTimeWindows
+}
 import org.apache.flink.streaming.api.windowing.time.Time
+import org.apache.flink.streaming.api.windowing.triggers.ProcessingTimeTrigger
+import org.apache.flink.streaming.api.windowing.windows.GlobalWindow
 
 case class JobConfig(
     brokers: Seq[String] = Seq(),
@@ -78,21 +83,28 @@ object MonitorKafka {
   val streamEnv: StreamExecutionEnvironment =
     StreamExecutionEnvironment.getExecutionEnvironment
 
+  val keySeparator: String = ":"
+
   def main(args: Array[String]) = {
     val jobConfig = OParser.parse(configParser, args, JobConfig())
 
     streamEnv
       .addSource(setupConsumer(jobConfig.get))
-      .map(x => (getKeyFromTopic(jobConfig.get.key.toList, x), 1))
-      .keyBy(_._1)
-      .sum(1)
+      .map(x => (getKeyFromTopic(jobConfig.get.key.toList, x), 1)) // Map to (key, 1)
+      .keyBy(_._1) // Key by that key
+      .sum(1) // Rolling aggregate.
+      .uid("sum-per-key")
+      .name("Sum per key")
       .flatMap { x =>
         List(("unique", 1), ("non_unique", x._2))
-      }
-      .keyBy(_._1)
-      .window(TumblingProcessingTimeWindows.of(
-        Time.seconds(jobConfig.get.emitTime)))
+      } // Then for each summed key, transform it to ("unique", 1) and ("non_unique", sum).
+      .keyBy(_._1) // Key by either unique or non_unique.
       .sum(1)
+      //.window(GlobalWindows.create()) // Tumbling window of x seconds.
+      //.trigger(new ProcessingTimeTrigger())
+      //  .aggregate() // CREATE AGGREGATE HERE THAT SUMS
+      //   .uid("sum-per-tumbling-window")
+      // .name("sum-per-tumbling-window")
       .print()
 
   }
