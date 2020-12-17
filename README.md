@@ -19,3 +19,6 @@ Usage: MonitorKafka [options]
   --parallelism <value>    The amount of parallel workers for Flink.
   --backendFolder <value>  Folder to store checkpoint data of Flink.
 ```
+
+## To Deploy
+Build a jar file using `sbt assembly` and then deploy onto a Flink cluster.

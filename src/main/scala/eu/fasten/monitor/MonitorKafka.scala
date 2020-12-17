@@ -1,20 +1,22 @@
 package eu.fasten.monitor
 
 import java.util.Properties
+import java.util.concurrent.TimeUnit
 
+import eu.fasten.monitor.influx.{InfluxSink, MapToPoint}
 import eu.fasten.monitor.util.eu.fasten.synchronization.util.SimpleKafkaDeserializationSchema
+import org.apache.flink.api.common.restartstrategy.RestartStrategies
 import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.databind.node.ObjectNode
 import org.apache.flink.streaming.api.scala.StreamExecutionEnvironment
 import org.apache.flink.streaming.connectors.kafka.FlinkKafkaConsumer
 import scopt.OParser
 import org.apache.flink.api.scala._
-import org.apache.flink.streaming.api.windowing.assigners.{
-  GlobalWindows,
-  TumblingProcessingTimeWindows
-}
+import org.apache.flink.contrib.streaming.state.RocksDBStateBackend
+import org.apache.flink.streaming.api.TimeCharacteristic
+import org.apache.flink.streaming.api.environment.CheckpointConfig.ExternalizedCheckpointCleanup
+import org.apache.flink.streaming.api.windowing.assigners.{GlobalWindows, TumblingProcessingTimeWindows}
 import org.apache.flink.streaming.api.windowing.time.Time
 import org.apache.flink.streaming.api.windowing.triggers.ProcessingTimeTrigger
-import org.apache.flink.streaming.api.windowing.windows.GlobalWindow
 
 case class JobConfig(
     brokers: Seq[String] = Seq(),
@@ -25,7 +27,8 @@ case class JobConfig(
     influxPort: Int = 0,
     influxDatabase: String = "kafka-monitor",
     parallelism: Int = 1,
-    backendFolder: String = "/mnt/fasten/flink-kafka-monitor/"
+    backendFolder: String = "/mnt/fasten/flink-kafka-monitor/",
+                    production: Boolean = false
 )
 object MonitorKafka {
 
@@ -78,6 +81,10 @@ object MonitorKafka {
         .optional()
         .text("Folder to store checkpoint data of Flink.")
         .action((x, c) => c.copy(backendFolder = x)),
+      opt[Unit]("production")
+        .optional()
+        .text("Flag to run the job in production.")
+        .action((x, c) => c.copy(production = true))
     )
   }
   val streamEnv: StreamExecutionEnvironment =
@@ -88,34 +95,69 @@ object MonitorKafka {
   def main(args: Array[String]) = {
     val jobConfig = OParser.parse(configParser, args, JobConfig())
 
+    if (jobConfig.isEmpty) {
+      System.exit(0)
+    }
+
+    streamEnv.setStreamTimeCharacteristic(TimeCharacteristic.ProcessingTime)
+
+
+    if (jobConfig.get.production) { // if production environment.
+      streamEnv.setParallelism(jobConfig.get.parallelism)
+      streamEnv.enableCheckpointing(5000)
+      streamEnv.setStateBackend(new RocksDBStateBackend(
+        s"file:///mnt/fasten/flink-kafka-monitor/monitor-${jobConfig.get.topic}",
+        true))
+      streamEnv.setRestartStrategy(
+        RestartStrategies.fixedDelayRestart(Integer.MAX_VALUE,
+          org.apache.flink.api.common.time.Time.of(10, TimeUnit.SECONDS)))
+      val cConfig = streamEnv.getCheckpointConfig
+      cConfig.enableExternalizedCheckpoints(
+        ExternalizedCheckpointCleanup.RETAIN_ON_CANCELLATION)
+    }
+
     streamEnv
       .addSource(setupConsumer(jobConfig.get))
       .map(x => (getKeyFromTopic(jobConfig.get.key.toList, x), 1)) // Map to (key, 1)
       .keyBy(_._1) // Key by that key
       .sum(1) // Rolling aggregate.
       .uid("sum-per-key")
-      .name("Sum per key")
+      .name("Sum per key.")
       .map { record =>
-        if (record._2 > 1) {
+        if (record._1 == "unparsed") {
+          ("unparsed", 1)
+        } else if (record._2 > 1) {
           ("non_unique", 1)
         } else {
           ("unique", 1)
         }
-      } // Then for each summed key, transform it to ("unique", 1) and ("non_unique", sum).
-      .keyBy(_._1) // Key by either unique or non_unique.
-      .window(TumblingProcessingTimeWindows.of(
-        Time.seconds(jobConfig.get.emitTime))) // Tumbling window of x seconds.
-      .sum(1)
+      } // Then for each summed key, transform it to ("unique", 1),  ("non_unique", 1) or ("unparsed", 1).
+      .keyBy(_._1) // Key by either unique, non_unique or unparsed.
+      .timeWindow(Time.seconds(jobConfig.get.emitTime)) // Tumbling window of x seconds.
+      .trigger(ProcessingTimeTrigger.create()) // Use a processing time trigger.
+      .sum(1) // Sum in the window on the second field (the count).
       .uid("sum-per-tumbling-window")
-      .name("sum-per-tumbling-window")
-      .print()
+      .name("Sum per tumbling window.")
+      .keyBy(_._1) // Key again by either unique, non_unique or unparsed.
+      .sum(1) // Get total sum.
+      .uid("total-sum")
+      .name("Total sum.")
+      .map(new MapToPoint(jobConfig.get.topic)) // Map to InfluxPoint.
+      .addSink(new InfluxSink(jobConfig.get.influxHost, jobConfig.get.influxPort, jobConfig.get.influxDatabase)) // Write to Influx
+      .uid("influx-sink")
+      .name("Influx Sink.")
 
+    streamEnv.execute(f"Monitor ${jobConfig.get.topic}")
   }
 
   def getKeyFromTopic(topicKeys: List[String], value: ObjectNode): String = {
     val keyValues = topicKeys
       .map(key => "/value/" + key.split("\\.").mkString("/"))
       .map(value.at(_).asText())
+
+    if (keyValues(0) == "") {
+      return "unparsed"
+    }
 
     keyValues.mkString(keySeparator)
   }
