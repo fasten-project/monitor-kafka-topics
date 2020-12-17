@@ -95,16 +95,19 @@ object MonitorKafka {
       .sum(1) // Rolling aggregate.
       .uid("sum-per-key")
       .name("Sum per key")
-      .flatMap { x =>
-        List(("unique", 1), ("non_unique", x._2))
+      .map { record =>
+        if (record._2 > 1) {
+          ("non_unique", 1)
+        } else {
+          ("unique", 1)
+        }
       } // Then for each summed key, transform it to ("unique", 1) and ("non_unique", sum).
       .keyBy(_._1) // Key by either unique or non_unique.
+      .window(TumblingProcessingTimeWindows.of(
+        Time.seconds(jobConfig.get.emitTime))) // Tumbling window of x seconds.
       .sum(1)
-      //.window(GlobalWindows.create()) // Tumbling window of x seconds.
-      //.trigger(new ProcessingTimeTrigger())
-      //  .aggregate() // CREATE AGGREGATE HERE THAT SUMS
-      //   .uid("sum-per-tumbling-window")
-      // .name("sum-per-tumbling-window")
+      .uid("sum-per-tumbling-window")
+      .name("sum-per-tumbling-window")
       .print()
 
   }
