@@ -13,17 +13,12 @@ def get_jars(flink_address):
     jars = requests.get(f"http://{flink_address}/jars").json()
     print("-- Uploaded jars -- ")
 
-    all_jars = []
     for files in jars["files"]:
-        all_jars.append(files['name'])
         print(f"Id: {files['id']}")
         print(f"Name: {files['name']}")
         print(f"Uploaded: {datetime.fromtimestamp(int(str(files['uploaded'])[:-3])).strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"Main class: {files['entry'][0]['name']}")
         print("--")
-
-    return all_jars
-
 
 def pretty_time_delta(seconds):
     sign_string = '-' if seconds < 0 else ''
@@ -45,17 +40,13 @@ def get_running_jobs(flink_address):
     jobs = requests.get(f"http://{flink_address}/jobs/overview").json()
     print("-- Running jobs --")
 
-    all_jobs =  []
     for job in jobs["jobs"]:
-        all_jobs.append(job['name'])
         print(f"Job ID: {job['jid']}")
         print(f"Name: {job['name']}")
         print(f"State: {job['state']}")
         print(f"Tasks: {job['tasks']['total']}")
         print(f"Duration: {pretty_time_delta(job['duration']/1000)}")
         print("--")
-
-    return all_jobs
 
 
 print(f"Deploying Monitoring Jobs on {flink_address}.")

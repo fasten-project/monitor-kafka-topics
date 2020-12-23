@@ -21,4 +21,7 @@ Usage: MonitorKafka [options]
 ```
 
 ## To Deploy
-Build a jar file using `sbt assembly` and then deploy onto a Flink cluster.
+Build a jar file using `sbt assembly` and then deploy onto a Flink cluster using the Python scripts in the `deployment` folder.
+```bash
+python3 overview.py FLINK_ADDRESS
+```
