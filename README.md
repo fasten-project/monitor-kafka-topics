@@ -1,5 +1,5 @@
 # Monitor Kafka topics
-A generic Flink job to monitor (unique) messages in a Kafka topic.
+A generic Flink job to monitor (unique) messages in a Kafka topic and publishes to InfluxDB.
 
 ## Usage
 ```bash

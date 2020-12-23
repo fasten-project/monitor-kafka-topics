@@ -14,7 +14,10 @@ import org.apache.flink.api.scala._
 import org.apache.flink.contrib.streaming.state.RocksDBStateBackend
 import org.apache.flink.streaming.api.TimeCharacteristic
 import org.apache.flink.streaming.api.environment.CheckpointConfig.ExternalizedCheckpointCleanup
-import org.apache.flink.streaming.api.windowing.assigners.{GlobalWindows, TumblingProcessingTimeWindows}
+import org.apache.flink.streaming.api.windowing.assigners.{
+  GlobalWindows,
+  TumblingProcessingTimeWindows
+}
 import org.apache.flink.streaming.api.windowing.time.Time
 import org.apache.flink.streaming.api.windowing.triggers.ProcessingTimeTrigger
 
@@ -28,7 +31,7 @@ case class JobConfig(
     influxDatabase: String = "kafka-monitor",
     parallelism: Int = 1,
     backendFolder: String = "/mnt/fasten/flink-kafka-monitor/",
-                    production: Boolean = false
+    production: Boolean = false
 )
 object MonitorKafka {
 
@@ -101,15 +104,15 @@ object MonitorKafka {
 
     streamEnv.setStreamTimeCharacteristic(TimeCharacteristic.ProcessingTime)
 
-
     if (jobConfig.get.production) { // if production environment.
       streamEnv.setParallelism(jobConfig.get.parallelism)
       streamEnv.enableCheckpointing(5000)
       streamEnv.setStateBackend(new RocksDBStateBackend(
-        s"file:///mnt/fasten/flink-kafka-monitor/monitor-${jobConfig.get.topic}",
+        s"file://${jobConfig.get.backendFolder}monitor-${jobConfig.get.topic}",
         true))
       streamEnv.setRestartStrategy(
-        RestartStrategies.fixedDelayRestart(Integer.MAX_VALUE,
+        RestartStrategies.fixedDelayRestart(
+          Integer.MAX_VALUE,
           org.apache.flink.api.common.time.Time.of(10, TimeUnit.SECONDS)))
       val cConfig = streamEnv.getCheckpointConfig
       cConfig.enableExternalizedCheckpoints(
@@ -143,7 +146,11 @@ object MonitorKafka {
       .uid("total-sum")
       .name("Total sum.")
       .map(new MapToPoint(jobConfig.get.topic)) // Map to InfluxPoint.
-      .addSink(new InfluxSink(jobConfig.get.influxHost, jobConfig.get.influxPort, jobConfig.get.influxDatabase)) // Write to Influx
+      .uid("map-to-point")
+      .name("Map to InfluxDB record.")
+      .addSink(new InfluxSink(jobConfig.get.influxHost,
+                              jobConfig.get.influxPort,
+                              jobConfig.get.influxDatabase)) // Write to Influx
       .uid("influx-sink")
       .name("Influx Sink.")
 

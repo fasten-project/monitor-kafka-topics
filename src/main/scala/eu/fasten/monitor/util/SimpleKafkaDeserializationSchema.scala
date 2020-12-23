@@ -2,7 +2,14 @@ package eu.fasten.monitor.util
 
 package eu.fasten.synchronization.util
 
+import com.google.gson.JsonParseException
+import com.typesafe.scalalogging.Logger
 import org.apache.flink.runtime.JobException
+import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.core.JsonParser
+import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.databind.{
+  JsonNode,
+  ObjectMapper
+}
 import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.databind.node.ObjectNode
 import org.apache.flink.streaming.util.serialization.JSONKeyValueDeserializationSchema
 import org.apache.flink.util.Collector
@@ -13,24 +20,50 @@ class SimpleKafkaDeserializationSchema(includeMetadata: Boolean,
     extends JSONKeyValueDeserializationSchema(includeMetadata) {
 
   var counter: Int = 0
+  private var objectMapper: ObjectMapper = null
+  private lazy val logger = Logger("Deserializer")
 
   override def deserialize(
-      message: ConsumerRecord[Array[Byte], Array[Byte]]): ObjectNode = {
+      record: ConsumerRecord[Array[Byte], Array[Byte]]): ObjectNode = {
+
+    if (objectMapper == null) {
+      objectMapper = new ObjectMapper()
+      objectMapper.configure(JsonParser.Feature.ALLOW_SINGLE_QUOTES, true)
+    }
+
     if (maxRecords != -1)
       counter += 1
 
-    val node: ObjectNode = super.deserialize(message)
+    objectMapper.configure(JsonParser.Feature.ALLOW_SINGLE_QUOTES, true)
 
-    if (includeMetadata) { //Add timestamp
-      node
-        .putObject("metadata")
-        .put("offset", message.offset())
-        .put("topic", message.topic())
-        .put("partition", message.partition())
-        .put("timestamp", message.timestamp())
+    val node: ObjectNode = objectMapper.createObjectNode();
+    try {
+
+      if (record.key() != null) {
+        node.set("key",
+                 objectMapper.readValue(record.key(), classOf[JsonNode]));
+      }
+      if (record.value() != null) {
+        node.set("value",
+                 objectMapper.readValue(record.value(), classOf[JsonNode]));
+      }
+
+      if (includeMetadata) {
+        node
+          .putObject("metadata")
+          .put("offset", record.offset())
+          .put("topic", record.topic())
+          .put("partition", record.partition())
+          .put("timestamp", record.timestamp())
+      }
+
+      return node
+    } catch {
+      case e: Exception =>
+        logger.warn(s"Can't deserialize message ${record.value().toString}", e)
     }
 
-    node
+    this.objectMapper.createObjectNode()
   }
 
   override def isEndOfStream(nextElement: ObjectNode): Boolean = {
