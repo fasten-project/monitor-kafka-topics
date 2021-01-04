@@ -34,7 +34,7 @@ lazy val root = (project in file(".")).
   settings(
     test in assembly := {},
     libraryDependencies ++= flinkDependencies,
-    assemblyJarName in assembly := "monitor_job.jar",
+    assemblyJarName in assembly := "lib/monitor_job.jar",
     assemblyOutputPath in assembly := file("lib/monitor_job.jar"),
     assemblyMergeStrategy in assembly := {
       case PathList("META-INF", xs @ _*)  => MergeStrategy.discard

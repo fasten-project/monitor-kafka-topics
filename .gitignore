@@ -4,3 +4,4 @@
 target/
 .bsp
 venv
+deployment/*.jar

@@ -1,6 +1,8 @@
 import requests
 import sys
 from datetime import datetime
+from tqdm import tqdm
+import os.path
 
 if len(sys.argv) != 2:
     print("Please specify Flink JobManager address: python3 deploy.py FLINK_ADDRESS")
@@ -40,6 +42,19 @@ def pretty_time_delta(seconds):
     else:
         return '%s%ds' % (sign_string, seconds)
 
+def download_file(url, filename):
+    """
+    Helper method handling downloading large files from `url` to `filename`. Returns a pointer to `filename`.
+    """
+    chunkSize = 1024
+    r = requests.get(url, stream=True)
+    with open(filename, 'wb') as f:
+        pbar = tqdm( unit="B", total=int( r.headers['Content-Length'] ) )
+        for chunk in r.iter_content(chunk_size=chunkSize):
+            if chunk: # filter out keep-alive new chunks
+                pbar.update (len(chunk))
+                f.write(chunk)
+    return filename
 
 def get_running_jobs(flink_address):
     jobs = requests.get(f"http://{flink_address}/jobs/overview").json()
@@ -57,9 +72,42 @@ def get_running_jobs(flink_address):
 
     return all_jobs
 
+def upload_jar(flink_address, jar_url):
+    if not os.path.isfile("monitor_job.jar"):
+        print("Downloading file: ")
+        download_file(jar_url, "../lib/monitor_job.jar")
+
+    print("Upload file: ")
+    files = {}
+    files["monitor.jar"] = ('monitor_job.jar', open("../lib/monitor_job.jar", 'rb'), 'application/x-java-archive')
+    upload = requests.post(f"http://{flink_address}/jars/upload", files=files)
+
+    if upload.json()["status"] == "success":
+        print("Upload successful.")
+    else:
+        print("Upload failed.")
+        print(upload.json())
+
+    return upload.json()
+
+def get_last_checkpoint(topic):
+    loc = f"/mnt/fasten/monitor-{topic}"
+    latest_job = max(all_subdirs = [d for d in os.listdir(loc) if os.path.isdir(d)], key=os.path.getmtime)
+    print(latest_job)
+    latest_checkpoint = max(all_subdirs = [d for d in os.listdir(latest_job) if os.path.isdir(d)], key=os.path.getmtime)
+    print(latest_checkpoint)
+
+def deploy_job(topic, key):
+    get_last_checkpoint(topic)
 
 print(f"Deploying Monitoring Jobs on {flink_address}.")
 
 print("-- OVERVIEW --")
-get_jars(flink_address)
-get_running_jobs(flink_address)
+jars = get_jars(flink_address)
+jobs = get_running_jobs(flink_address)
+
+# Check if we need to upload the jar.
+if "monitor_job.jar" not in jars:
+    upload_jar(flink_address, "https://github.com/fasten-project/monitor-kafka-topics/raw/1.0/lib/monitor_job.jar")
+
+deploy_job("fasten.GraphDBExtension.out", "meh")
